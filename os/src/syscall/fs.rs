@@ -1,13 +1,11 @@
 //! File and filesystem-related syscalls
 const FD_STDOUT: usize = 1;
-use super::SYSCALL_WRITE;
+use super::process::inc_syscall_write;
 
 /// write buf of length `len`  to a file with `fd`
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     trace!("kernel: sys_write");
-    unsafe {
-        crate::syscall::process::SYS_CALL_COUNT[SYSCALL_WRITE] += 1;
-    }
+    inc_syscall_write();
     match fd {
         FD_STDOUT => {
             let slice = unsafe { core::slice::from_raw_parts(buf, len) };
