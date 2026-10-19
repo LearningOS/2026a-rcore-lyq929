@@ -1,39 +1,27 @@
 //! Process management syscalls
 use crate::{
-    sync::UPSafeCell,
     task::{exit_current_and_run_next, suspend_current_and_run_next},
     timer::get_time_us,
+    mm::{copy_from_user, copy_to_user, UserPtr},
 };
-use lazy_static::*;
+use core::cell::RefCell;
 
-/// syscall id 的上界，用于给调用次数表定大小
-/// ch3 只用到 write(64)/exit(93)/yield(124)/get_time(169)/trace(410)，取 512 足够
-const SYSCALL_ID_MAX: usize = 512;
-
-lazy_static! {
-    /// 记录每个 syscall id 被调用的累计次数（sys_trace 本身也算一次）
-    static ref SYSCALL_COUNT: UPSafeCell<[usize; SYSCALL_ID_MAX]> = unsafe {
-        UPSafeCell::new([0usize; SYSCALL_ID_MAX])
-    };
-}
-
-/// 每次进入任意 syscall 时调用，把该 syscall id 的计数加一
-pub fn record_syscall(id: usize) {
-    if id < SYSCALL_ID_MAX {
-        SYSCALL_COUNT.exclusive_access()[id] += 1;
-    }
-}
+use super::{SYSCALL_EXIT, SYSCALL_GET_TIME, SYSCALL_TRACE, SYSCALL_YIELD, SYSCALL_WRITE};
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct TimeVal {
     pub sec: usize,
     pub usec: usize,
 }
 
+/// 全局系统调用计数，供 sys_trace / count_syscall 使用
+pub static SYS_CALL_COUNT: RefCell<[usize; 512]> = RefCell::new([0; 512]);
+
 /// task exits and submit an exit code
 pub fn sys_exit(exit_code: i32) -> ! {
     trace!("[kernel] Application exited with code {}", exit_code);
+    SYS_CALL_COUNT.borrow_mut()[SYSCALL_EXIT] += 1;
     exit_current_and_run_next();
     panic!("Unreachable in sys_exit!");
 }
@@ -41,6 +29,7 @@ pub fn sys_exit(exit_code: i32) -> ! {
 /// current task gives up resources for other tasks
 pub fn sys_yield() -> isize {
     trace!("kernel: sys_yield");
+    SYS_CALL_COUNT.borrow_mut()[SYSCALL_YIELD] += 1;
     suspend_current_and_run_next();
     0
 }
@@ -48,6 +37,7 @@ pub fn sys_yield() -> isize {
 /// get time with second and microsecond
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
+    SYS_CALL_COUNT.borrow_mut()[SYSCALL_GET_TIME] += 1;
     let us = get_time_us();
     unsafe {
         *ts = TimeVal {
@@ -58,33 +48,40 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
-/// 实现 sys_trace 系统调用（TraceRequest: Read=0, Write=1, Syscall=2）
-///
-/// - Read : 读出地址 `id` 处 1 个字节并返回其值
-/// - Write: 把字节 `data` 写入地址 `id`
-/// - Syscall: 返回 syscall id 为 `id` 的调用累计次数
-///
-/// ch3 还没有地址空间/页表，用户程序直接加载进内核空间运行，
-/// 传入的地址就是真实物理地址，因此可以直接用裸指针读写，无需权限检查。
+/// sys_trace syscall id=410
+/// trace_request（来自用户 TraceRequest枚举）
+/// 0 → Read：id=user_va，读取1字节
+/// 1 → Write：id=user_va，data=u8字节
+/// 2 → Syscall：id=syscall_id，返回该syscall调用次数
 pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
-    trace!("kernel: sys_trace");
+    trace!("kernel: sys_trace req={},id={},data={}", trace_request, id, data);
+    SYS_CALL_COUNT.borrow_mut()[SYSCALL_TRACE] += 1;
+
     match trace_request {
-        // Read：读地址 id 处的字节
-        0 => unsafe { core::ptr::read_volatile(id as *const u8) as isize },
-        // Write：把 data 的低 8 位写入地址 id
-        1 => {
-            unsafe {
-                core::ptr::write_volatile(id as *mut u8, data as u8);
-            }
-            0
-        }
-        // Syscall：返回该 syscall id 的累计调用次数
-        2 => {
-            if id < SYSCALL_ID_MAX {
-                SYSCALL_COUNT.exclusive_access()[id] as isize
+        // TraceRequest::Read = 0 读用户地址一字节
+        0 => {
+            let user_ptr = UserPtr(id as *const u8);
+            let mut byte = 0u8;
+            if copy_from_user(&mut byte, user_ptr, 1) == 0 {
+                byte as isize
             } else {
-                0
+                -1
             }
+        }
+        // TraceRequest::Write =1 写用户地址一字节
+        1 => {
+            let val = (data & 0xff) as u8;
+            let user_ptr = UserPtr(id as *mut u8);
+            if copy_to_user(user_ptr, &val, 1) == 0 {
+                0
+            } else {
+                -1
+            }
+        }
+        // TraceRequest::Syscall =2 查询系统调用计数
+        2 => {
+            let cnt = SYS_CALL_COUNT.borrow()[id];
+            cnt as isize
         }
         _ => -1,
     }
