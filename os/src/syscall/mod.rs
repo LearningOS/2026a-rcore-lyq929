@@ -16,7 +16,7 @@ pub struct TimeVal {
 /// system call entry
 pub fn syscall(sys_id: usize, args: [usize; 3]) -> isize {
     use crate::task::{inc_syscall_cnt, TASK_MANAGER};
-    // 【必须在match外面，所有syscall先计数】
+    // 所有系统调用进入首先计数，必须在match外面
     let app_id = TASK_MANAGER.get_current_task_id();
     inc_syscall_cnt(app_id, sys_id);
 
