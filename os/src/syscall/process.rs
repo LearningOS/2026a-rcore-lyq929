@@ -1,5 +1,5 @@
 //! process related syscalls
-use crate::task::{exit_current_and_run_next, get_syscall_cnt, suspend_current_and_run_next};
+use crate::task::{get_syscall_cnt, TASK_MANAGER};
 use crate::timer::get_time_us;
 use super::TimeVal;
 /// syscall id: write
@@ -20,13 +20,13 @@ const TRACE_SYSCALL: usize = 2;
 /// sys_exit: terminate current task
 pub fn sys_exit(x_exit_code: i32) -> isize {
     trace!("kernel: sys_exit {}", x_exit_code);
-    exit_current_and_run_next();
+    TASK_MANAGER.exit_current_and_run_next();
     0
 }
 /// sys_yield: give up CPU and switch to next task
 pub fn sys_yield() -> isize {
     trace!("kernel: sys_yield");
-    suspend_current_and_run_next();
+    TASK_MANAGER.suspend_current_and_run_next();
     0
 }
 /// sys_get_time: get wall time
@@ -48,10 +48,8 @@ pub fn sys_trace(req: usize, arg1: usize, arg2: usize) -> isize {
     trace!("kernel: sys_trace req={}, arg1={}, arg2={}", req, arg1, arg2);
     match req {
         TRACE_SYSCALL => {
-            // arg1: task id(app_id), arg2: syscall id
             get_syscall_cnt(arg1, arg2) as isize
         }
-        // TRACE_READ / TRACE_WRITE ch3不需要，返回-1
         TRACE_READ | TRACE_WRITE => -1,
         _ => -1,
     }

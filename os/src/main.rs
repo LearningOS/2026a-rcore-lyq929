@@ -12,7 +12,7 @@
 //! initialize various pieces of functionality. (See its source code for
 //! details.)
 //!
-//! We then call [`task::run_first_task()`] and for the first time go to
+//! We then call [`TASK_MANAGER.run_first_task()`] and for the first time go to
 //! userspace.
 #![deny(missing_docs)]
 #![deny(warnings)]
@@ -36,6 +36,9 @@ pub mod syscall;
 pub mod task;
 pub mod timer;
 pub mod trap;
+
+use crate::task::TASK_MANAGER;
+
 core::arch::global_asm!(include_str!("entry.asm"));
 core::arch::global_asm!(include_str!("link_app.S"));
 /// clear BSS segment
@@ -94,5 +97,5 @@ pub fn rust_main() -> ! {
     loader::load_apps();
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
-    task::run_first_task();
+    TASK_MANAGER.run_first_task();
 }
