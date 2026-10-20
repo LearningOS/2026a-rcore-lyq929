@@ -8,6 +8,7 @@
 //!
 //! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
 //! might not be what you expect.
+#![allow(missing_docs)]
 mod context;
 mod switch;
 #[allow(clippy::module_inception)]
@@ -55,7 +56,6 @@ struct TaskManagerInner {
 }
 
 // Global task manager instance, manages all user applications
-#[allow(missing_docs)]
 lazy_static! {
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
