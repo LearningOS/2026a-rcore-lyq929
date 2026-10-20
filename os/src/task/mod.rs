@@ -47,7 +47,6 @@ lazy_static! {
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             if i < num_app {
-                // 修复！不要 task.task_cx = init_app_cx(i);
                 task.task_status = TaskStatus::Ready;
                 task.syscall_cnt = [0; 411];
             } else {
@@ -70,8 +69,8 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
-        // 这里调用init_app_cx拿到初始上下文指针，传给__switch，这才是原版写法！
-        let next_task_cx_ptr = init_app_cx(0);
+        let next_task_cx_addr: usize = init_app_cx(0);
+        let next_task_cx_ptr = next_task_cx_addr as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         unsafe {
@@ -117,49 +116,59 @@ impl TaskManager {
         }
     }
 
+    /// Increment syscall counter for current task
     pub fn inc_syscall_cnt(&self, sys_id: usize) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].syscall_cnt[sys_id] += 1;
     }
 
+    /// Get syscall counter value
     pub fn get_syscall_cnt(&self, sys_id: usize) -> usize {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].syscall_cnt[sys_id]
     }
 
+    /// Start task manager and run tasks
     pub fn run(&self) -> ! {
         self.run_first_task()
     }
 
+    /// Suspend current task and run next ready task
     pub fn suspend_current_and_run_next(&self) {
         self.mark_current_suspended();
         self.run_next_task();
     }
 
+    /// Exit current task and run next ready task
     pub fn exit_current_and_run_next(&self) {
         self.mark_current_exited();
         self.run_next_task();
     }
 }
 
+/// Increase syscall count of current task
 pub fn inc_syscall_cnt(sys_id: usize) {
     TASK_MANAGER.inc_syscall_cnt(sys_id);
 }
 
+/// Read syscall count
 pub fn get_syscall_cnt(sys_id: usize) -> usize {
     TASK_MANAGER.get_syscall_cnt(sys_id)
 }
 
+/// Suspend current task and switch
 pub fn suspend_current_and_run_next() {
     TASK_MANAGER.suspend_current_and_run_next();
 }
 
+/// Exit current task and switch
 pub fn exit_current_and_run_next() {
     TASK_MANAGER.exit_current_and_run_next();
 }
 
+/// Run first user application
 pub fn run_first_task() -> ! {
     TASK_MANAGER.run_first_task()
 }
