@@ -1,5 +1,5 @@
 //! process related syscalls
-use crate::task::{exit_current_and_run_next, get_syscall_cnt, reset_syscall_cnt, suspend_current_and_run_next};
+use crate::task::{exit_current_and_run_next, get_syscall_cnt, suspend_current_and_run_next};
 use crate::timer::get_time_us;
 use super::TimeVal;
 
