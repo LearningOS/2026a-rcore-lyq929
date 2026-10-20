@@ -1,4 +1,5 @@
 //! process related syscalls
+use crate::task::{exit_current_and_run_next, get_syscall_cnt, reset_syscall_cnt, suspend_current_and_run_next};
 use crate::timer::get_time_us;
 use super::TimeVal;
 
@@ -12,8 +13,6 @@ pub const SYS_YIELD: usize = 124;
 pub const SYS_EXIT: usize = 93;
 /// syscall id: trace
 pub const SYS_TRACE: usize = 410;
-/// total syscall count
-pub const SYS_CALL_COUNT: usize = 411;
 
 /// TraceRequest definition (match user lib.rs)
 /// Read = 0, Write = 1, Syscall = 2
@@ -24,14 +23,14 @@ const TRACE_SYSCALL: usize = 2;
 /// sys_exit: terminate current task
 pub fn sys_exit(x_exit_code: i32) -> isize {
     trace!("kernel: sys_exit {}", x_exit_code);
-    crate::task::exit_current_and_run_next();
+    exit_current_and_run_next();
     0
 }
 
 /// sys_yield: give up CPU and switch to next task
 pub fn sys_yield() -> isize {
     trace!("kernel: sys_yield");
-    crate::task::suspend_current_and_run_next();
+    suspend_current_and_run_next();
     0
 }
 
@@ -57,7 +56,7 @@ pub fn sys_trace(req: usize, arg1: usize, arg2: usize) -> isize {
             // count_syscall(id) → req=2, arg1=syscall_id, arg2 unused
             get_syscall_cnt(arg1) as isize
         }
-        // TRACE_READ / TRACE_WRITE 你暂时可以先返回-1，ch3只用到TRACE_SYSCALL
+        // TRACE_READ / TRACE_WRITE ch3不需要，返回-1
         TRACE_READ | TRACE_WRITE => -1,
         _ => -1,
     }

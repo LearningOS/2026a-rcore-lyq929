@@ -43,13 +43,14 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_status: TaskStatus::UnInit,
             task_cx: TaskContext::zero_init(),
-            syscall_cnt: [0; SYS_CALL_COUNT],
+            syscall_cnt: [0; 411],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             if i < num_app {
+                // init_app_cx 参数是app index，原版loader里面init_app_cx接收索引
                 task.task_cx = init_app_cx(i);
                 task.task_status = TaskStatus::Ready;
-                task.syscall_cnt = [0; SYS_CALL_COUNT];
+                task.syscall_cnt = [0; 411];
             } else {
                 task.task_status = TaskStatus::UnInit;
             }
@@ -69,7 +70,7 @@ impl TaskManager {
     ///
     /// Generally, the first task in task list is an idle task (we call it zero process later).
     /// But in ch3, we load apps statically, so the first task is a real app.
-    fn run_first_task(&self) -> ! {
+    pub fn run_first_task(&self) -> ! {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
@@ -181,4 +182,19 @@ pub fn get_syscall_cnt(sys_id: usize) -> usize {
 /// reset counter of a syscall for current task
 pub fn reset_syscall_cnt(sys_id: usize) {
     TASK_MANAGER.reset_syscall_cnt(sys_id);
+}
+
+/// Suspend current task and run next ready task (对外导出，trap/process用)
+pub fn suspend_current_and_run_next() {
+    TASK_MANAGER.suspend_current_and_run_next();
+}
+
+/// Exit current task and run next ready task (对外导出，trap/process用)
+pub fn exit_current_and_run_next() {
+    TASK_MANAGER.exit_current_and_run_next();
+}
+
+/// run first task (main.rs调用)
+pub fn run_first_task() -> ! {
+    TASK_MANAGER.run_first_task()
 }

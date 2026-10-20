@@ -1,6 +1,7 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::syscall::process::SYS_CALL_COUNT;
+/// total syscall number for trace counter
+const SYS_CALL_COUNT: usize = 411;
 
 /// The task control block (TCB) of a task.
 #[derive(Copy, Clone)]

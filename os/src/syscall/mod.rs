@@ -23,7 +23,7 @@ pub fn syscall(sys_id: usize, args: [usize; 3]) -> isize {
         SYS_GETTIMEOFDAY => sys_get_time(args[0] as *mut TimeVal, args[1]),
         SYS_YIELD => sys_yield(),
         SYS_EXIT => sys_exit(args[0] as i32),
-        SYS_TRACE => sys_trace(args[0], args[1]),
+        SYS_TRACE => sys_trace(args[0], args[1], args[2]),
         _ => -1,
     }
 }
