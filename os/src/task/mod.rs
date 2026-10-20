@@ -137,7 +137,7 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
-        /// add 1 to current task syscall count
+    /// add 1 to current task syscall count
     pub fn inc_current_syscall_count(&self) {
         let mut inner = self.inner.exclusive_access();
         let current_id = inner.current_task;
@@ -157,6 +157,7 @@ impl TaskManager {
         let current_id = inner.current_task;
         inner.tasks[current_id].syscall_count = val;
     }
+
 
 
 }
@@ -194,13 +195,17 @@ pub fn exit_current_and_run_next() {
     run_next_task();
 }
 
+/// increase syscall count of current running task
 pub fn inc_current_syscall_count() {
     TASK_MANAGER.inc_current_syscall_count();
 }
+/// read syscall count of current running task
 pub fn read_current_syscall_count() -> usize {
     TASK_MANAGER.read_current_syscall_count()
 }
+/// set syscall count of current running task
 pub fn write_current_syscall_count(val: usize) {
     TASK_MANAGER.write_current_syscall_count(val);
 }
+
 

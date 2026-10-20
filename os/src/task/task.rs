@@ -7,9 +7,10 @@ pub struct TaskControlBlock {
     pub task_status: TaskStatus,
     /// The task context
     pub task_cx: TaskContext,
-    // 新增：当前任务系统调用总计数（用于sys_trace）
+    /// syscall counter of this task
     pub syscall_count: usize,
 }
+
 /// The status of a task
 #[derive(Copy, Clone, PartialEq)]
 pub enum TaskStatus {

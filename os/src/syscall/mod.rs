@@ -10,11 +10,15 @@
 //! `sys_` then the name of the syscall. You can find functions like this in
 //! submodules, and you should also implement syscalls this way.
 
+/// Time value for sys_get_time
 #[derive(Debug, Clone, Copy)]
 pub struct TimeVal {
+    /// seconds
     pub tv_sec: usize,
+    /// microseconds
     pub tv_usec: usize,
 }
+
 
 /// write syscall
 const SYSCALL_WRITE: usize = 64;
