@@ -1,25 +1,41 @@
 //! process related syscalls
-use crate::task::{read_current_syscall_count, write_current_syscall_count};
-use crate::task;
 use crate::timer::get_time_us;
 use super::TimeVal;
 
-pub fn inc_syscall_write() {
-    task::inc_current_syscall_count();
-}
+/// syscall id: write
+pub const SYS_WRITE: usize = 64;
+/// syscall id: get time of day
+pub const SYS_GETTIMEOFDAY: usize = 169;
+/// syscall id: yield
+pub const SYS_YIELD: usize = 124;
+/// syscall id: exit
+pub const SYS_EXIT: usize = 93;
+/// syscall id: trace
+pub const SYS_TRACE: usize = 410;
+/// total syscall count
+pub const SYS_CALL_COUNT: usize = 411;
 
+/// TraceRequest definition (match user lib.rs)
+/// Read = 0, Write = 1, Syscall = 2
+const TRACE_READ: usize = 0;
+const TRACE_WRITE: usize = 1;
+const TRACE_SYSCALL: usize = 2;
+
+/// sys_exit: terminate current task
 pub fn sys_exit(x_exit_code: i32) -> isize {
     trace!("kernel: sys_exit {}", x_exit_code);
-    task::exit_current_and_run_next();
+    crate::task::exit_current_and_run_next();
     0
 }
 
+/// sys_yield: give up CPU and switch to next task
 pub fn sys_yield() -> isize {
     trace!("kernel: sys_yield");
-    task::suspend_current_and_run_next();
+    crate::task::suspend_current_and_run_next();
     0
 }
 
+/// sys_get_time: get wall time
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     let us = get_time_us();
@@ -32,19 +48,17 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
-// SYS_TRACE 410
-pub fn sys_trace(cmd: usize, value: usize, _unused: usize) -> isize {
-    trace!("kernel: sys_trace cmd={},val={}", cmd, value);
-    match cmd {
-        0 => {
-            // read counter
-            read_current_syscall_count() as isize
+/// sys_trace: 3 args, match user lib.rs
+/// req: TraceRequest, arg1, arg2
+pub fn sys_trace(req: usize, arg1: usize, arg2: usize) -> isize {
+    trace!("kernel: sys_trace req={}, arg1={}, arg2={}", req, arg1, arg2);
+    match req {
+        TRACE_SYSCALL => {
+            // count_syscall(id) → req=2, arg1=syscall_id, arg2 unused
+            get_syscall_cnt(arg1) as isize
         }
-        1 => {
-            // set counter
-            write_current_syscall_count(value);
-            0
-        }
+        // TRACE_READ / TRACE_WRITE 你暂时可以先返回-1，ch3只用到TRACE_SYSCALL
+        TRACE_READ | TRACE_WRITE => -1,
         _ => -1,
     }
 }
