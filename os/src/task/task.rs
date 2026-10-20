@@ -1,7 +1,5 @@
 //! Types related to task management
-
 use super::TaskContext;
-
 /// The task control block (TCB) of a task.
 #[derive(Copy, Clone)]
 pub struct TaskControlBlock {
@@ -9,8 +7,9 @@ pub struct TaskControlBlock {
     pub task_status: TaskStatus,
     /// The task context
     pub task_cx: TaskContext,
+    // 新增：当前任务系统调用总计数（用于sys_trace）
+    pub syscall_count: usize,
 }
-
 /// The status of a task
 #[derive(Copy, Clone, PartialEq)]
 pub enum TaskStatus {
