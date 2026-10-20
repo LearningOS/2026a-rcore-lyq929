@@ -55,6 +55,7 @@ struct TaskManagerInner {
 }
 
 // Global task manager instance, manages all user applications
+#[allow(missing_docs)]
 lazy_static! {
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
@@ -64,7 +65,6 @@ lazy_static! {
         }; MAX_APP_NUM];
         for i in 0..num_app {
             tasks[i].task_status = TaskStatus::Ready;
-            // 原版模板：goto_restore，不是 goto_trap_return！
             tasks[i].task_cx = TaskContext::goto_restore(init_app_cx(i));
         }
         TaskManager {
