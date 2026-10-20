@@ -13,7 +13,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, SYS_CALL_COUNT};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
@@ -21,23 +21,22 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 pub use context::TaskContext;
 
-// ========== 全局系统调用计数器（重点！不侵入TCB）==========
-use crate::syscall::process::SYS_CALL_COUNT;
+// 全局二维系统调用计数器：[app_id][sys_id]
 static mut SYSCALL_COUNT: [[usize; SYS_CALL_COUNT]; MAX_APP_NUM] = [[0; SYS_CALL_COUNT]; MAX_APP_NUM];
 
-/// 给当前任务增加对应syscall计数
+/// 给当前任务的某个系统调用计数+1
 pub fn inc_syscall_cnt(app_id: usize, sys_id: usize) {
     unsafe {
         SYSCALL_COUNT[app_id][sys_id] += 1;
     }
 }
-/// 获取指定任务指定系统调用的计数，给 sys_trace
+
+/// 查询指定任务、指定系统调用的次数（给sys_trace）
 pub fn get_syscall_cnt(app_id: usize, sys_id: usize) -> usize {
     unsafe {
         SYSCALL_COUNT[app_id][sys_id]
     }
 }
-// ======================================================
 
 /// The task manager, where all the tasks are managed.
 pub struct TaskManager {
@@ -59,9 +58,8 @@ lazy_static! {
         }; MAX_APP_NUM];
         for i in 0..num_app {
             tasks[i].task_status = TaskStatus::Ready;
-            // 注意：这里保存的是 TaskContext，不是 TrapContext！
-            // init_app_cx 返回 TrapContext 地址，是 trap 入口用的，不要混！
-            tasks[i].task_cx = TaskContext::goto_trap_return(init_app_cx(i));
+            // 原版模板：goto_restore，不是 goto_trap_return！
+            tasks[i].task_cx = TaskContext::goto_restore(init_app_cx(i));
         }
         TaskManager {
             num_app,
@@ -88,19 +86,24 @@ impl TaskManager {
         panic!("run_first_task returned!");
     }
 
-    /// Yield current task, switch to next ready task (时间片轮转)
-    pub fn yield_current(&self) {
+    /// 新增：对外接口，获取当前任务id（解决inner私有问题）
+    pub fn get_current_task_id(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.current_task
+    }
+
+    /// 原版模板自带，不要修改这两个调度函数声明！
+    pub fn suspend_current_and_run_next(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].task_status = TaskStatus::Ready;
-        // 找下一个就绪任务，轮转
+        // 轮转找下一个就绪任务
         let mut next = (current + 1) % self.num_app;
         while inner.tasks[next].task_status != TaskStatus::Ready {
             next = (next + 1) % self.num_app;
         }
         inner.tasks[next].task_status = TaskStatus::Running;
         inner.current_task = next;
-
         let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
         let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
         drop(inner);
@@ -109,19 +112,17 @@ impl TaskManager {
         }
     }
 
-    /// Sleep 系统调用：把当前任务置为UnInit（ch3 sleep要求）
-    pub fn sleep_current(&self) {
+    pub fn exit_current_and_run_next(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        inner.tasks[current].task_status = TaskStatus::UnInit;
-        // 找下一个就绪任务
+        inner.tasks[current].task_status = TaskStatus::Exited;
+        // 找下一个就绪
         let mut next = (current + 1) % self.num_app;
         while inner.tasks[next].task_status != TaskStatus::Ready {
             next = (next + 1) % self.num_app;
         }
         inner.tasks[next].task_status = TaskStatus::Running;
         inner.current_task = next;
-
         let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
         let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
         drop(inner);
