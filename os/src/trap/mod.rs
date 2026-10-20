@@ -11,9 +11,11 @@
 //! It then calls different functionality based on what exactly the exception
 //! was. For example, timer interrupts trigger task preemption, and syscalls go
 //! to [`syscall()`].
+
 mod context;
+
 use crate::syscall::syscall;
-use crate::task::TASK_MANAGER;
+use crate::task::{exit_current_and_run_next, suspend_current_and_run_next};
 use crate::timer::set_next_trigger;
 use core::arch::global_asm;
 use riscv::register::{
@@ -21,7 +23,9 @@ use riscv::register::{
     scause::{self, Exception, Interrupt, Trap},
     sie, stval, stvec,
 };
+
 global_asm!(include_str!("trap.S"));
+
 /// Initialize trap handling
 pub fn init() {
     extern "C" {
@@ -31,12 +35,14 @@ pub fn init() {
         stvec::write(__alltraps as usize, TrapMode::Direct);
     }
 }
+
 /// enable timer interrupt in supervisor mode
 pub fn enable_timer_interrupt() {
     unsafe {
         sie::set_stimer();
     }
 }
+
 /// trap handler
 #[no_mangle]
 pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
@@ -52,15 +58,15 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
         }
         Trap::Exception(Exception::StoreFault) | Trap::Exception(Exception::StorePageFault) => {
             println!("[kernel] PageFault in application, bad addr = {:#x}, bad instruction = {:#x}, kernel killed it.", stval, cx.sepc);
-            TASK_MANAGER.exit_current_and_run_next();
+            exit_current_and_run_next();
         }
         Trap::Exception(Exception::IllegalInstruction) => {
             println!("[kernel] IllegalInstruction in application, kernel killed it.");
-            TASK_MANAGER.exit_current_and_run_next();
+            exit_current_and_run_next();
         }
         Trap::Interrupt(Interrupt::SupervisorTimer) => {
             set_next_trigger();
-            TASK_MANAGER.suspend_current_and_run_next();
+            suspend_current_and_run_next();
         }
         _ => {
             panic!(
@@ -72,4 +78,5 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
     }
     cx
 }
+
 pub use context::TrapContext;

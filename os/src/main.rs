@@ -12,17 +12,21 @@
 //! initialize various pieces of functionality. (See its source code for
 //! details.)
 //!
-//! We then call [`TASK_MANAGER.run_first_task()`] and for the first time go to
+//! We then call [`task::run_first_task()`] and for the first time go to
 //! userspace.
+
 #![deny(missing_docs)]
 #![deny(warnings)]
 #![no_std]
 #![no_main]
 #![feature(panic_info_message)]
 #![feature(alloc_error_handler)]
+
 #[macro_use]
 extern crate log;
+
 extern crate alloc;
+
 #[macro_use]
 mod console;
 pub mod config;
@@ -37,10 +41,9 @@ pub mod task;
 pub mod timer;
 pub mod trap;
 
-use crate::task::TASK_MANAGER;
-
 core::arch::global_asm!(include_str!("entry.asm"));
 core::arch::global_asm!(include_str!("link_app.S"));
+
 /// clear BSS segment
 fn clear_bss() {
     extern "C" {
@@ -52,6 +55,7 @@ fn clear_bss() {
             .fill(0);
     }
 }
+
 /// kernel log info
 fn kernel_log_info() {
     extern "C" {
@@ -87,6 +91,7 @@ fn kernel_log_info() {
     );
     error!("[kernel] .bss [{:#x}, {:#x})", sbss as usize, ebss as usize);
 }
+
 #[no_mangle]
 /// the rust entry-point of os
 pub fn rust_main() -> ! {
@@ -97,5 +102,6 @@ pub fn rust_main() -> ! {
     loader::load_apps();
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
-    TASK_MANAGER.run_first_task();
+    task::run_first_task();
+    panic!("Unreachable in rust_main!");
 }

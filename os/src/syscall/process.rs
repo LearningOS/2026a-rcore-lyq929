@@ -1,73 +1,89 @@
-//! process related syscalls
-use crate::task::{get_syscall_cnt, TASK_MANAGER};
-use crate::timer::get_time_us;
-use super::TimeVal;
+//! Process management syscalls
+use crate::{
+    config::MEMORY_END,
+    task::{current_syscall_count, exit_current_and_run_next, suspend_current_and_run_next},
+    timer::get_time_us,
+};
 
-/// syscall id: write
-pub const SYS_WRITE: usize = 64;
-/// syscall id: get time of day
-pub const SYS_GETTIMEOFDAY: usize = 169;
-/// syscall id: yield
-pub const SYS_YIELD: usize = 124;
-/// syscall id: exit
-pub const SYS_EXIT: usize = 93;
-/// syscall id: trace
-pub const SYS_TRACE: usize = 410;
-/// syscall id: getpid
-pub const SYS_GETPID: usize = 172;
-
-/// TraceRequest definition (match user lib.rs)
-/// Read = 0, Write = 1, Syscall = 2
+/// `trace` request: read a byte from user memory
 const TRACE_READ: usize = 0;
+/// `trace` request: write a byte into user memory
 const TRACE_WRITE: usize = 1;
+/// `trace` request: query how many times a syscall has been called
 const TRACE_SYSCALL: usize = 2;
 
-/// sys_exit: terminate current task
-pub fn sys_exit(x_exit_code: i32) -> isize {
-    trace!("kernel: sys_exit {}", x_exit_code);
-    TASK_MANAGER.exit_current_and_run_next();
-    0
+/// Lowest address which belongs to the RAM the kernel can touch directly.
+const MEMORY_START: usize = 0x8000_0000;
+
+/// Is `addr` inside the RAM, i.e. is it safe for the kernel to dereference?
+///
+/// In chapter 3 the kernel runs without paging and every app shares the same
+/// address space, so the whole physical memory is directly accessible and the
+/// only kind of address we must reject is one outside of RAM.
+fn is_valid_user_addr(addr: usize) -> bool {
+    (MEMORY_START..MEMORY_END).contains(&addr)
 }
 
-/// sys_yield: give up CPU and switch to next task
+#[repr(C)]
+#[derive(Debug)]
+pub struct TimeVal {
+    pub sec: usize,
+    pub usec: usize,
+}
+
+/// task exits and submit an exit code
+pub fn sys_exit(exit_code: i32) -> ! {
+    trace!("[kernel] Application exited with code {}", exit_code);
+    exit_current_and_run_next();
+    panic!("Unreachable in sys_exit!");
+}
+
+/// current task gives up resources for other tasks
 pub fn sys_yield() -> isize {
     trace!("kernel: sys_yield");
-    TASK_MANAGER.suspend_current_and_run_next();
+    suspend_current_and_run_next();
     0
 }
 
-/// sys_get_time: get wall time
+/// get time with second and microsecond
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     let us = get_time_us();
     unsafe {
         *ts = TimeVal {
-            tv_sec: us / 1_000_000,
-            tv_usec: us % 1_000_000,
+            sec: us / 1_000_000,
+            usec: us % 1_000_000,
         };
     }
     0
 }
 
-/// sys_getpid return current task app_id(array index)
-pub fn sys_getpid() -> isize {
-    trace!("kernel: sys_getpid");
-    let app_id = TASK_MANAGER.get_current_task_id();
-    app_id as isize
-}
-
-/// sys_trace: 3 args
-pub fn sys_trace(req: usize, arg1: usize, arg2: usize) -> isize {
-    trace!("kernel: sys_trace req={}, arg1={}, arg2={}", req, arg1, arg2);
-    match req {
-        TRACE_SYSCALL => {
-            // arg1 = app_id(task index), arg2 = syscall id
-            if arg1 >= crate::config::MAX_APP_NUM || arg2 >= crate::config::SYS_CALL_COUNT {
+/// Trace the execution of the current task.
+///
+/// * `Read`: read one byte at user address `id` and return it, `-1` on failure.
+/// * `Write`: write `data` (its lowest byte) to user address `id`, `0` on
+///   success and `-1` on failure.
+/// * `Syscall`: return how many times syscall `id` has been called by the
+///   current task. Since the counters are updated on syscall entry, the count
+///   already includes this very `trace` call.
+pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
+    match trace_request {
+        TRACE_READ => {
+            if !is_valid_user_addr(id) {
                 return -1;
             }
-            get_syscall_cnt(arg1, arg2) as isize
+            unsafe { core::ptr::read_volatile(id as *const u8) as isize }
         }
-        TRACE_READ | TRACE_WRITE => -1,
+        TRACE_WRITE => {
+            if !is_valid_user_addr(id) {
+                return -1;
+            }
+            unsafe {
+                core::ptr::write_volatile(id as *mut u8, data as u8);
+            }
+            0
+        }
+        TRACE_SYSCALL => current_syscall_count(id) as isize,
         _ => -1,
     }
 }
