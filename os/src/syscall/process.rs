@@ -48,9 +48,14 @@ pub fn sys_trace(req: usize, arg1: usize, arg2: usize) -> isize {
     trace!("kernel: sys_trace req={}, arg1={}, arg2={}", req, arg1, arg2);
     match req {
         TRACE_SYSCALL => {
+            // 边界校验：app_id不能超过MAX_APP_NUM，sys_id不能超过SYS_CALL_COUNT
+            if arg1 >= crate::config::MAX_APP_NUM || arg2 >= crate::config::SYS_CALL_COUNT {
+                return -1;
+            }
             get_syscall_cnt(arg1, arg2) as isize
         }
         TRACE_READ | TRACE_WRITE => -1,
         _ => -1,
     }
 }
+
