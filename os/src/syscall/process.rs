@@ -8,6 +8,7 @@ pub const SYS_GETTIMEOFDAY: usize = 169;
 pub const SYS_YIELD: usize = 124;
 pub const SYS_EXIT: usize = 93;
 pub const SYS_TRACE: usize = 410;
+pub const SYS_GETPID: usize = 172; // 增加getpid系统调用号
 
 const TRACE_READ: usize = 0;
 const TRACE_WRITE: usize = 1;
@@ -37,11 +38,18 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
+/// 返回当前任务app_id（数组下标）
+pub fn sys_getpid() -> isize {
+    trace!("kernel: sys_getpid");
+    let app_id = TASK_MANAGER.get_current_task_id();
+    app_id as isize
+}
+
 pub fn sys_trace(req: usize, arg1: usize, arg2: usize) -> isize {
     trace!("kernel: sys_trace req={}, arg1={}, arg2={}", req, arg1, arg2);
     match req {
         TRACE_SYSCALL => {
-            // arg1 = app_id(任务ID), arg2 = syscall编号，顺序千万不能颠倒
+            // arg1 = app_id(来自用户getpid返回值，是任务数组下标), arg2 = syscall id
             if arg1 >= crate::config::MAX_APP_NUM || arg2 >= crate::config::SYS_CALL_COUNT {
                 return -1;
             }
