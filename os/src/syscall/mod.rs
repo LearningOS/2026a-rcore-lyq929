@@ -10,6 +10,12 @@
 //! `sys_` then the name of the syscall. You can find functions like this in
 //! submodules, and you should also implement syscalls this way.
 
+#[derive(Debug, Clone, Copy)]
+pub struct TimeVal {
+    pub tv_sec: usize,
+    pub tv_usec: usize,
+}
+
 /// write syscall
 const SYSCALL_WRITE: usize = 64;
 /// exit syscall
@@ -20,13 +26,10 @@ const SYSCALL_YIELD: usize = 124;
 const SYSCALL_GET_TIME: usize = 169;
 /// trace syscall
 const SYSCALL_TRACE: usize = 410;
-
 mod fs;
 mod process;
-
 use fs::*;
 use process::*;
-
 /// handle syscall exception with `syscall_id` and other arguments
 pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
     match syscall_id {
