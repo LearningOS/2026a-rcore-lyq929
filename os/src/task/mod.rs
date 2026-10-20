@@ -13,28 +13,33 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use core::ptr;
 use crate::config::{MAX_APP_NUM, SYS_CALL_COUNT};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
+
 pub use task::{TaskControlBlock, TaskStatus};
 pub use context::TaskContext;
 
 // 全局二维系统调用计数器：[app_id][sys_id]
 static mut SYSCALL_COUNT: [[usize; SYS_CALL_COUNT]; MAX_APP_NUM] = [[0; SYS_CALL_COUNT]; MAX_APP_NUM];
 
-/// 给当前任务的某个系统调用计数+1
+/// 给当前任务的某个系统调用计数+1（volatile 防编译器优化）
 pub fn inc_syscall_cnt(app_id: usize, sys_id: usize) {
     unsafe {
-        SYSCALL_COUNT[app_id][sys_id] += 1;
+        let p = &mut SYSCALL_COUNT[app_id][sys_id] as *mut usize;
+        let val = ptr::read_volatile(p);
+        ptr::write_volatile(p, val + 1);
     }
 }
 
-/// 查询指定任务、指定系统调用的次数（给sys_trace）
+/// 查询指定任务、指定系统调用的次数（给sys_trace，volatile读）
 pub fn get_syscall_cnt(app_id: usize, sys_id: usize) -> usize {
     unsafe {
-        SYSCALL_COUNT[app_id][sys_id]
+        let p = &SYSCALL_COUNT[app_id][sys_id] as *const usize;
+        ptr::read_volatile(p)
     }
 }
 
@@ -49,6 +54,7 @@ struct TaskManagerInner {
     current_task: usize,
 }
 
+/// Global task manager instance, manages all user applications
 lazy_static! {
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
@@ -72,7 +78,7 @@ lazy_static! {
 }
 
 impl TaskManager {
-    /// Run the first task in task list.
+    /// Start the first task, never return
     pub fn run_first_task(&self) -> ! {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
@@ -92,7 +98,7 @@ impl TaskManager {
         inner.current_task
     }
 
-    /// 原版模板自带，不要修改这两个调度函数声明！
+    /// Suspend current task and switch to next ready task
     pub fn suspend_current_and_run_next(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
@@ -112,6 +118,7 @@ impl TaskManager {
         }
     }
 
+    /// Exit current task and switch to next ready task
     pub fn exit_current_and_run_next(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
