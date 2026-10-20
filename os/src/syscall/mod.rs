@@ -3,6 +3,7 @@ mod fs;
 mod process;
 use fs::*;
 use process::*;
+
 /// Time value for sys_get_time
 #[derive(Debug, Clone, Copy)]
 pub struct TimeVal {
@@ -11,10 +12,11 @@ pub struct TimeVal {
     /// microseconds
     pub tv_usec: usize,
 }
+
 /// system call entry
 pub fn syscall(sys_id: usize, args: [usize; 3]) -> isize {
     use crate::task::{inc_syscall_cnt, TASK_MANAGER};
-    // 用公开方法拿task id，不碰私有inner
+    // 【关键修复】所有系统调用先计数，放在match外面
     let app_id = TASK_MANAGER.get_current_task_id();
     inc_syscall_cnt(app_id, sys_id);
 
