@@ -1,13 +1,15 @@
-//! Task management implementation
+//! 任务管理：任务从创建、调度到上下文切换的全过程。
 //!
-//! Everything about task management, like starting and switching tasks is
-//! implemented here.
+//! 内核里只维护一个全局的任务管理器 `TASK_MANAGER`，它掌握着：
+//! - 一张定长的任务表（`tasks`，长度为 `MAX_APP_NUM`）；
+//! - 当前正在运行的“任务”是哪一个（`current_task`）。
 //!
-//! A single global instance of [`TaskManager`] called `TASK_MANAGER` controls
-//! all the tasks in the operating system.
+//! 调度采用最简单的时间片轮转：时钟中断一到，就把当前任务挂起，轮着去
+//! 找下一个处于 `Ready` 状态的任务接管 CPU。
 //!
-//! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
-//! might not be what you expect.
+//! ⚠️ 特别注意 `switch.S` 里的 `__switch`：它只是“保存旧任务的上下文、装载
+//! 新任务的上下文”，并不会主动改变控制流，真正让它生效的是被调用后寄存器
+//! 被换掉了这一事实——所以它两边的代码执行顺序可能和你直觉相反。
 
 mod context;
 mod switch;
@@ -23,40 +25,40 @@ pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 
-/// Per-task syscall counters, indexed by `[task_id][syscall_id]`.
+/// 每个任务调用每种系统调用的次数统计表，索引是 `[task_id][syscall_id]`。
 ///
-/// The counters live in a standalone static array instead of `TaskControlBlock`
-/// so that the (rather large) array is not copied around on the tiny boot
-/// stack when the task manager is initialised.
+/// 这张表没有挂在 `TaskControlBlock` 里，而是单独放一个静态数组：一来避免
+/// 任务表初始化时把这块较大的数组在小启动栈上拷贝来拷贝去；二来 `trace`
+/// 系统调用可以直接用裸索引访问，不必绕道任务结构体。
 static mut SYSCALL_COUNTS: [[u32; MAX_SYSCALL_NUM]; MAX_APP_NUM] =
     [[0; MAX_SYSCALL_NUM]; MAX_APP_NUM];
 
-/// The task manager, where all the tasks are managed.
+/// 任务管理器。
 ///
-/// Functions implemented on `TaskManager` deals with all task state transitions
-/// and task context switching. For convenience, you can find wrappers around it
-/// in the module level.
-///
-/// Most of `TaskManager` are hidden behind the field `inner`, to defer
-/// borrowing checks to runtime. You can see examples on how to use `inner` in
-/// existing functions on `TaskManager`.
+/// 它本身很小，真正可变的状态都藏在 `inner` 字段里，靠 `UPSafeCell` 在
+/// 运行期做借用检查。好处是：对外只需持有一个 `&self` 就能完成所有状态
+/// 迁移，不用到处传 `&mut`。
 pub struct TaskManager {
-    /// total number of tasks
+    /// 任务总数。
     num_app: usize,
-    /// use inner value to get mutable access
+    /// 内层状态（任务表 + 当前任务编号）。
     inner: UPSafeCell<TaskManagerInner>,
 }
 
-/// Inner of Task Manager
+/// 任务管理器的内部可变状态。
 pub struct TaskManagerInner {
-    /// task list
+    /// 定长任务表。
     tasks: [TaskControlBlock; MAX_APP_NUM],
-    /// id of current `Running` task
+    /// 当前正在运行的任务编号。
     current_task: usize,
 }
 
 lazy_static! {
-    /// Global variable: TASK_MANAGER
+    /// 全局唯一任务管理器。
+    ///
+    /// 初始化时给每个任务装上 `TaskContext`：让它的 `ra` 指向汇编里的
+    /// `__restore`、`sp` 指向自己的内核栈上保存的 `TrapContext`，这样第一次
+    /// 切到该任务时，`__switch` 会跳到 `__restore`，进而进入用户态程序入口。
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
         let mut tasks = [TaskControlBlock {
@@ -80,42 +82,47 @@ lazy_static! {
 }
 
 impl TaskManager {
-    /// Run the first task in task list.
+    /// 启动第一个任务。
     ///
-    /// Generally, the first task in task list is an idle task (we call it zero process later).
-    /// But in ch3, we load apps statically, so the first task is a real app.
+    /// 第三章里任务表是编译期静态装好的，没有真正的 idle 进程，所以第一个
+    /// 任务就是第一个用户程序。这里用一个“不存在的空上下文”作为起点，
+    /// 让 `__switch` 从旧任务（实则是内核主流程）切进 0 号任务。
     fn run_first_task(&self) -> ! {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
-        drop(inner);
+        drop(inner); // 切栈前必须释放所有可变借用，避免借用检查在汇编切换时捣乱
         let mut _unused = TaskContext::zero_init();
-        // before this, we should drop local variables that must be dropped manually
         unsafe {
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
         }
         panic!("unreachable in run_first_task!");
     }
 
-    /// Change the status of current `Running` task into `Ready`.
-    fn mark_current_suspended(&self) {
+    /// 把当前正在运行的任务标记为“就绪”。
+    ///
+    /// 这是任务主动让出 CPU（`sys_yield`）或时间片耗尽（时钟中断）时的前一半。
+    fn set_current_ready(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].task_status = TaskStatus::Ready;
     }
 
-    /// Change the status of current `Running` task into `Exited`.
-    fn mark_current_exited(&self) {
+    /// 把当前正在运行的任务标记为“已退出”。
+    ///
+    /// 这是 `sys_exit` 时的前一半：任务不再参与调度，直接从任务表中摘出。
+    fn set_current_exited(&self) {
         let mut inner = self.inner.exclusive_access();
         let current = inner.current_task;
         inner.tasks[current].task_status = TaskStatus::Exited;
     }
 
-    /// Find next task to run and return task id.
+    /// 挑选下一个应该运行的任务，返回它的编号；没有就绪任务则返回 `None`。
     ///
-    /// In this case, we only return the first `Ready` task in task list.
-    fn find_next_task(&self) -> Option<usize> {
+    /// 采用简单的轮转：从“当前任务的后一个”开始绕一圈找第一个 `Ready` 的
+    /// 任务。这样每个任务都能被公平地轮流照顾到。
+    fn pick_next_ready(&self) -> Option<usize> {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
         (current + 1..current + self.num_app + 1)
@@ -123,65 +130,53 @@ impl TaskManager {
             .find(|id| inner.tasks[*id].task_status == TaskStatus::Ready)
     }
 
-    /// Switch current `Running` task to the task we have found,
-    /// or there is no `Ready` task and we can exit with all applications completed
+    /// 真正执行调度：把当前任务让出去，切换到一个就绪任务。
+    ///
+    /// 如果没有任何就绪任务，说明所有程序都已跑完，直接 panic 结束（在
+    /// 真实场景这里应该由内核自行收尾）。
     fn run_next_task(&self) {
-        if let Some(next) = self.find_next_task() {
+        if let Some(next) = self.pick_next_ready() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
+            // 更新状态：下一个任务变成 Running，当前任务维持现状（Ready/Exited）。
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
+            // 拿到新旧两个上下文的指针后，必须先释放借用再切栈。
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
-            // before this, we should drop local variables that must be dropped manually
             unsafe {
                 __switch(current_task_cx_ptr, next_task_cx_ptr);
             }
-            // go back to user mode
         } else {
             panic!("All applications completed!");
         }
     }
 }
 
-/// Run the first task in task list.
+/// 启动第一个任务（模块级包装）。
 pub fn run_first_task() {
     TASK_MANAGER.run_first_task();
 }
 
-/// Switch current `Running` task to the task we have found,
-/// or there is no `Ready` task and we can exit with all applications completed
-fn run_next_task() {
+/// 把当前任务挂起并调度到下一个任务。
+///
+/// `sys_yield` 主动让出 CPU 和时钟中断被动抢走 CPU 都走这条路。
+pub fn suspend_current_and_run_next() {
+    TASK_MANAGER.set_current_ready();
     TASK_MANAGER.run_next_task();
 }
 
-/// Change the status of current `Running` task into `Ready`.
-fn mark_current_suspended() {
-    TASK_MANAGER.mark_current_suspended();
-}
-
-/// Change the status of current `Running` task into `Exited`.
-fn mark_current_exited() {
-    TASK_MANAGER.mark_current_exited();
-}
-
-/// Suspend the current 'Running' task and run the next task in task list.
-pub fn suspend_current_and_run_next() {
-    mark_current_suspended();
-    run_next_task();
-}
-
-/// Exit the current 'Running' task and run the next task in task list.
+/// 让当前任务退出并调度到下一个任务。
 pub fn exit_current_and_run_next() {
-    mark_current_exited();
-    run_next_task();
+    TASK_MANAGER.set_current_exited();
+    TASK_MANAGER.run_next_task();
 }
 
-/// Record one more syscall `id` issued by the current task.
+/// 记录当前任务又调用了一次系统调用 `id`。
 ///
-/// This is called on every syscall entry, so the count of the syscall which is
-/// being executed already includes the current call.
+/// 在每次系统调用分发前调用，所以 `trace(Syscall, id)` 查询到的那次计数
+/// 已经把“正在问的这次”算进去了。
 pub fn inc_current_syscall_count(id: usize) {
     if id >= MAX_SYSCALL_NUM {
         return;
@@ -192,7 +187,7 @@ pub fn inc_current_syscall_count(id: usize) {
     }
 }
 
-/// How many times has the current task issued syscall `id` so far.
+/// 查询当前任务调用系统调用 `id` 的次数。
 pub fn current_syscall_count(id: usize) -> usize {
     if id >= MAX_SYSCALL_NUM {
         return 0;

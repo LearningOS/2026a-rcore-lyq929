@@ -1,24 +1,19 @@
-//! Implementation of syscalls
+//! 系统调用的实现与分发。
 //!
-//! The single entry point to all system calls, [`syscall()`], is called
-//! whenever userspace wishes to perform a system call using the `ecall`
-//! instruction. In this case, the processor raises an 'Environment call from
-//! U-mode' exception, which is handled as one of the cases in
-//! [`crate::trap::trap_handler`].
-//!
-//! For clarity, each single syscall is implemented as its own function, named
-//! `sys_` then the name of the syscall. You can find functions like this in
-//! submodules, and you should also implement syscalls this way.
+//! 用户态通过 `ecall` 发起系统调用，硬件把它变成一个“来自 U 态的环境调用”
+//! 异常，最终由 [`crate::trap::trap_handler`] 交到这里。`syscall()` 是唯一
+//! 入口，按系统调用号把请求分发到对应的具体实现。每个具体实现写成独立的
+//! `do_xxx` 函数，方便阅读和后续扩展。
 
-/// write syscall
+/// write 系统调用号。
 const SYSCALL_WRITE: usize = 64;
-/// exit syscall
+/// exit 系统调用号。
 const SYSCALL_EXIT: usize = 93;
-/// yield syscall
+/// yield 系统调用号。
 const SYSCALL_YIELD: usize = 124;
-/// gettime syscall
+/// gettime 系统调用号。
 const SYSCALL_GET_TIME: usize = 169;
-/// trace syscall
+/// trace 系统调用号。
 const SYSCALL_TRACE: usize = 410;
 
 mod fs;
@@ -27,17 +22,16 @@ mod process;
 use fs::*;
 use process::*;
 
-/// handle syscall exception with `syscall_id` and other arguments
+/// 处理一次系统调用：`syscall_id` 是系统调用号，`args` 是三个参数。
 pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
-    // Account the syscall before dispatching, so that a `trace(Syscall, id)`
-    // query observes the very call which is asking the question.
+    // 分发前先记账，保证 trace(Syscall, id) 查询到的计数已经包含当前这次调用。
     crate::task::inc_current_syscall_count(syscall_id);
     match syscall_id {
-        SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
-        SYSCALL_EXIT => sys_exit(args[0] as i32),
-        SYSCALL_YIELD => sys_yield(),
-        SYSCALL_GET_TIME => sys_get_time(args[0] as *mut TimeVal, args[1]),
-        SYSCALL_TRACE => sys_trace(args[0], args[1], args[2]),
+        SYSCALL_WRITE => write_to_stdout(args[0], args[1] as *const u8, args[2]),
+        SYSCALL_EXIT => do_exit(args[0] as i32),
+        SYSCALL_YIELD => do_yield(),
+        SYSCALL_GET_TIME => do_get_time(args[0] as *mut TimeVal, args[1]),
+        SYSCALL_TRACE => do_trace(args[0], args[1], args[2]),
         _ => panic!("Unsupported syscall_id: {}", syscall_id),
     }
 }

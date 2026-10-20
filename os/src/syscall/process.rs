@@ -1,29 +1,30 @@
-//! Process management syscalls
+//! 进程（任务）管理相关的系统调用：退出、让出 CPU、取时间、trace。
+
 use crate::{
     config::MEMORY_END,
     task::{current_syscall_count, exit_current_and_run_next, suspend_current_and_run_next},
     timer::get_time_us,
 };
 
-/// `trace` request: read a byte from user memory
+/// `trace` 请求类型：从用户内存读一个字节。
 const TRACE_READ: usize = 0;
-/// `trace` request: write a byte into user memory
+/// `trace` 请求类型：往用户内存写一个字节。
 const TRACE_WRITE: usize = 1;
-/// `trace` request: query how many times a syscall has been called
+/// `trace` 请求类型：查询某个系统调用被调用了多少次。
 const TRACE_SYSCALL: usize = 2;
 
-/// Lowest address which belongs to the RAM the kernel can touch directly.
+/// 内核可以直接访问的物理内存的起始地址。
 const MEMORY_START: usize = 0x8000_0000;
 
-/// Is `addr` inside the RAM, i.e. is it safe for the kernel to dereference?
+/// 判断 `addr` 是否落在 RAM 内，即内核能否安全地解引用它。
 ///
-/// In chapter 3 the kernel runs without paging and every app shares the same
-/// address space, so the whole physical memory is directly accessible and the
-/// only kind of address we must reject is one outside of RAM.
+/// 第三章没有分页、所有应用共享同一地址空间，整块物理内存都直接可访问，
+/// 因此唯一需要拒绝的地址就是超出 RAM 范围的那些。
 fn is_valid_user_addr(addr: usize) -> bool {
     (MEMORY_START..MEMORY_END).contains(&addr)
 }
 
+/// 秒/微秒结构体，`gettime` 用它把时间写回用户内存。
 #[repr(C)]
 #[derive(Debug)]
 pub struct TimeVal {
@@ -31,22 +32,25 @@ pub struct TimeVal {
     pub usec: usize,
 }
 
-/// task exits and submit an exit code
-pub fn sys_exit(exit_code: i32) -> ! {
+/// 让当前任务退出，并附上退出码。
+///
+/// 退出后立刻把控制权交给下一个任务；理论上是不可达函数，若真的继续往下
+/// 走说明调度出了问题。
+pub fn do_exit(exit_code: i32) -> ! {
     trace!("[kernel] Application exited with code {}", exit_code);
     exit_current_and_run_next();
     panic!("Unreachable in sys_exit!");
 }
 
-/// current task gives up resources for other tasks
-pub fn sys_yield() -> isize {
+/// 当前任务主动让出 CPU，供其它任务运行。
+pub fn do_yield() -> isize {
     trace!("kernel: sys_yield");
     suspend_current_and_run_next();
     0
 }
 
-/// get time with second and microsecond
-pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+/// 取当前时刻，以秒 + 微秒的形式写进 `ts` 指向的用户结构体。
+pub fn do_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
     let us = get_time_us();
     unsafe {
@@ -58,15 +62,15 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
-/// Trace the execution of the current task.
+/// 实现 `trace`：对当前任务进行三种观测之一。
 ///
-/// * `Read`: read one byte at user address `id` and return it, `-1` on failure.
-/// * `Write`: write `data` (its lowest byte) to user address `id`, `0` on
-///   success and `-1` on failure.
-/// * `Syscall`: return how many times syscall `id` has been called by the
-///   current task. Since the counters are updated on syscall entry, the count
-///   already includes this very `trace` call.
-pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
+/// - `Read`：读用户地址 `id` 处的 1 字节并返回，失败返回 -1；
+/// - `Write`：把 `data` 的最低字节写到用户地址 `id`，成功返回 0、失败 -1；
+/// - `Syscall`：返回当前任务调用系统调用 `id` 的次数。
+///
+/// 因为计数器在每次系统调用入口就更新，这里查到的次数已包含当前这次
+/// `trace` 自身。
+pub fn do_trace(trace_request: usize, id: usize, data: usize) -> isize {
     match trace_request {
         TRACE_READ => {
             if !is_valid_user_addr(id) {
