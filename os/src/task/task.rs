@@ -1,8 +1,5 @@
 //! Types related to task management
 use super::TaskContext;
-/// total syscall number for trace counter
-const SYS_CALL_COUNT: usize = 411;
-
 /// The task control block (TCB) of a task.
 #[derive(Copy, Clone)]
 pub struct TaskControlBlock {
@@ -10,10 +7,7 @@ pub struct TaskControlBlock {
     pub task_status: TaskStatus,
     /// The task context
     pub task_cx: TaskContext,
-    /// per-syscall counter array for sys_trace
-    pub syscall_cnt: [usize; SYS_CALL_COUNT],
 }
-
 /// The status of a task
 #[derive(Copy, Clone, PartialEq)]
 pub enum TaskStatus {
