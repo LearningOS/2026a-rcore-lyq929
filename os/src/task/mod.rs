@@ -54,7 +54,7 @@ struct TaskManagerInner {
     current_task: usize,
 }
 
-/// Global task manager instance, manages all user applications
+// Global task manager instance, manages all user applications
 lazy_static! {
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
@@ -92,7 +92,7 @@ impl TaskManager {
         panic!("run_first_task returned!");
     }
 
-    /// 新增：对外接口，获取当前任务id（解决inner私有问题）
+    /// Get id of currently running task
     pub fn get_current_task_id(&self) -> usize {
         let inner = self.inner.exclusive_access();
         inner.current_task
