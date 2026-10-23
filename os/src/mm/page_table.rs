@@ -157,16 +157,58 @@ impl PageTable {
     }
 }
 
-/// Translate&Copy a ptr[u8] array with LENGTH len to a mutable u8 Vec through page table
-pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&'static mut [u8]> {
+/// The first virtual address which does not belong to the user space.
+///
+/// SV39 can only address the lower half `[0, 1 << 38)` in user mode.
+pub const USER_ADDR_LIMIT: usize = 1 << 38;
+
+/// How the kernel wants to access a user buffer.
+#[derive(Copy, Clone, PartialEq)]
+pub enum UserAccess {
+    /// The kernel reads from the user buffer.
+    Read,
+    /// The kernel writes into the user buffer.
+    Write,
+}
+
+impl UserAccess {
+    /// Whether the page table entry grants the requested access.
+    fn allowed(&self, pte: &PageTableEntry) -> bool {
+        match self {
+            UserAccess::Read => pte.readable(),
+            UserAccess::Write => pte.writable(),
+        }
+    }
+}
+
+/// Translate a `[u8]` buffer of `len` bytes at user address `ptr` into a
+/// `Vec` of physical byte slices through the page table identified by `token`.
+///
+/// Unlike the unchecked tutorial version, it returns `None` instead of
+/// panicking when the range is not entirely mapped in user space or when any
+/// page lacks the permission `access` asks for.  The returned slices never
+/// cross a page boundary, so a buffer splitted by two pages becomes two slices.
+pub fn translated_byte_buffer_checked(
+    token: usize,
+    ptr: *const u8,
+    len: usize,
+    access: UserAccess,
+) -> Option<Vec<&'static mut [u8]>> {
     let page_table = PageTable::from_token(token);
     let mut start = ptr as usize;
-    let end = start + len;
+    let end = start.checked_add(len)?;
+    if end > USER_ADDR_LIMIT {
+        return None;
+    }
     let mut v = Vec::new();
     while start < end {
         let start_va = VirtAddr::from(start);
         let mut vpn = start_va.floor();
-        let ppn = page_table.translate(vpn).unwrap().ppn();
+        let pte = page_table.translate(vpn)?;
+        if !pte.is_valid() || !access.allowed(&pte) {
+            return None;
+        }
+        let ppn = pte.ppn();
         vpn.step();
         let mut end_va: VirtAddr = vpn.into();
         end_va = end_va.min(VirtAddr::from(end));
@@ -177,5 +219,5 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         }
         start = end_va.into();
     }
-    v
+    Some(v)
 }
