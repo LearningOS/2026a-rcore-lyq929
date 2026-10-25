@@ -9,6 +9,16 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
 
+/// Basic scheduling quantum for the stride scheduler.
+///
+/// A process's stride is derived from its priority as
+/// `stride = BIG_STRIDE / priority`, so a higher priority yields a smaller
+/// stride and therefore more frequent scheduling.
+pub const BIG_STRIDE: usize = 1 << 20;
+
+/// Priority used when a new process does not explicitly pick one.
+const DEFAULT_PRIO: usize = 16;
+
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -68,6 +78,13 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// How fast the process accumulates `pass`; inversely tied to priority.
+    pub stride: usize,
+
+    /// Total scheduling credits accumulated so far. The process with the
+    /// lowest `pass` is chosen to run next.
+    pub pass: usize,
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +135,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    stride: BIG_STRIDE / DEFAULT_PRIO,
+                    pass: 0,
                 })
             },
         };
@@ -191,6 +210,8 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    stride: parent_inner.stride,
+                    pass: 0,
                 })
             },
         });

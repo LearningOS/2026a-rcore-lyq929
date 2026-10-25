@@ -2,12 +2,14 @@
 use alloc::sync::Arc;
 
 use crate::{
+    config::PAGE_SIZE,
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
+    mm::{translated_byte_buffer, translated_refmut, translated_str, MapPermission, VirtAddr},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
+        suspend_current_and_run_next, TaskControlBlock, BIG_STRIDE,
     },
+    timer::get_time_us,
 };
 
 #[repr(C)]
@@ -15,6 +17,13 @@ use crate::{
 pub struct TimeVal {
     pub sec: usize,
     pub usec: usize,
+}
+
+/// View an arbitrary plain-old-data value as its raw byte slice.
+fn as_bytes<T>(value: &T) -> &[u8] {
+    unsafe {
+        core::slice::from_raw_parts(value as *const T as *const u8, core::mem::size_of::<T>())
+    }
 }
 
 /// task exits and submit an exit code
@@ -102,33 +111,80 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
     // ---- release current PCB automatically
 }
 
-/// YOUR JOB: get time with second and microsecond
-/// HINT: You might reimplement it with virtual memory management.
-/// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// Fill the user-visible `TimeVal` with the current wall clock.
+///
+/// The target may straddle two pages, so we copy byte by byte through the
+/// translated user buffers.
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    trace!("kernel:pid[{}] sys_get_time", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let now = get_time_us();
+    let val = TimeVal {
+        sec: now / 1_000_000,
+        usec: now % 1_000_000,
+    };
+    let bytes = as_bytes(&val);
+    let mut done = 0;
+    for chunk in translated_byte_buffer(token, ts as *const u8, bytes.len()) {
+        let n = chunk.len().min(bytes.len() - done);
+        chunk[..n].copy_from_slice(&bytes[done..done + n]);
+        done += n;
+    }
+    0
 }
 
-/// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// Map a new anonymous region `[start, start+len)` with the given access.
+///
+/// `port` is a bit mask: bit 0 read, bit 1 write, bit 2 execute. The region
+/// must be page aligned and must not overlap any area already mapped.
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    trace!("kernel:pid[{}] sys_mmap", current_task().unwrap().pid.0);
+    if len == 0 || port == 0 || port & !0b111 != 0 || !VirtAddr::from(start).aligned() {
+        return -1;
+    }
+    let perm = prot_to_perm(port);
+    let start_va = VirtAddr::from(start);
+    let end_va = VirtAddr::from(start + len);
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    if inner.memory_set.overlaps(start_va, end_va) {
+        return -1;
+    }
+    inner.memory_set.insert_framed_area(start_va, end_va, perm);
+    0
 }
 
-/// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// Translate a 3-bit `prot` mask into a [`MapPermission`], always user-mode.
+fn prot_to_perm(port: usize) -> MapPermission {
+    let mut p = MapPermission::U;
+    if port & 0b001 != 0 {
+        p |= MapPermission::R;
+    }
+    if port & 0b010 != 0 {
+        p |= MapPermission::W;
+    }
+    if port & 0b100 != 0 {
+        p |= MapPermission::X;
+    }
+    p
+}
+
+/// Unmap a page-aligned region that was previously mapped as a whole.
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    trace!("kernel:pid[{}] sys_munmap", current_task().unwrap().pid.0);
+    if len == 0 || len % PAGE_SIZE != 0 || !VirtAddr::from(start).aligned() {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    if inner
+        .memory_set
+        .remove_area(VirtAddr::from(start), VirtAddr::from(start + len))
+    {
+        0
+    } else {
+        -1
+    }
 }
 
 /// change data segment size
@@ -141,21 +197,44 @@ pub fn sys_sbrk(size: i32) -> isize {
     }
 }
 
-/// YOUR JOB: Implement spawn.
-/// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+/// Start a fresh application directly from its elf, without copying the
+/// caller's address space.
+///
+/// Unlike a `fork` followed by `exec`, `spawn` builds a brand-new space from
+/// the named program and hooks the new process under the current one.
+pub fn sys_spawn(path: *const u8) -> isize {
+    trace!("kernel:pid[{}] sys_spawn", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let name = translated_str(token, path);
+    if let Some(data) = get_app_data_by_name(name.as_str()) {
+        let parent = current_task().unwrap();
+        let child = Arc::new(TaskControlBlock::new(data));
+        let child_pid = child.pid.0;
+        // Link the new process as a child of the caller.
+        child.inner_exclusive_access().parent = Some(Arc::downgrade(&parent));
+        parent.inner_exclusive_access().children.push(child.clone());
+        add_task(child);
+        child_pid as isize
+    } else {
+        -1
+    }
 }
 
-// YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+/// Change the priority of the current process.
+///
+/// The priority must be at least 2; its stride becomes `BIG_STRIDE / prio`
+/// (never zero). Returns the new priority on success.
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio < 2 {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    // Keep the stride non-zero even for a very large priority.
+    inner.stride = (BIG_STRIDE / prio as usize).max(1);
+    prio
 }
