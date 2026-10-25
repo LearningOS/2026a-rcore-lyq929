@@ -59,13 +59,13 @@ impl OSInode {
         let inode = &inner.inode;
         Stat {
             dev: 0,
-            ino: inode.inode_id() as u64,
-            mode: if inode.is_dir() {
+            ino: inode.id() as u64,
+            mode: if inode.is_directory() {
                 StatMode::DIR
             } else {
                 StatMode::FILE
             },
-            nlink: inode.nlink(),
+            nlink: inode.link_count(),
             pad: [0u64; 7],
         }
     }
@@ -183,7 +183,7 @@ impl File for OSInode {
 /// not exist or points to a directory.
 pub fn link_file(old_name: &str, new_name: &str) -> isize {
     if let Some(inode) = ROOT_INODE.find(old_name) {
-        if inode.is_dir() || ROOT_INODE.link(new_name, &inode).is_none() {
+        if inode.is_directory() || ROOT_INODE.make_link(new_name, &inode).is_none() {
             -1
         } else {
             0
@@ -195,7 +195,7 @@ pub fn link_file(old_name: &str, new_name: &str) -> isize {
 
 /// Remove the file `name` from the root directory.
 pub fn unlink_file(name: &str) -> isize {
-    if ROOT_INODE.unlink(name).is_some() {
+    if ROOT_INODE.delete_link(name).is_some() {
         0
     } else {
         -1
