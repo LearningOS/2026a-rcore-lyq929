@@ -72,6 +72,7 @@ impl OSInode {
 }
 
 lazy_static! {
+    /// The filesystem root inode, corresponding to the root directory.
     pub static ref ROOT_INODE: Arc<Inode> = {
         let efs = EasyFileSystem::open(BLOCK_DEVICE.clone());
         Arc::new(EasyFileSystem::root_inode(&efs))
