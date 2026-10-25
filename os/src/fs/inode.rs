@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, Stat, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -52,6 +52,22 @@ impl OSInode {
             v.extend_from_slice(&buffer[..len]);
         }
         v
+    }
+    /// Collect the metadata of the underlying filesystem inode.
+    pub fn inode_metadata(&self) -> Stat {
+        let inner = self.inner.exclusive_access();
+        let inode = &inner.inode;
+        Stat {
+            dev: 0,
+            ino: inode.inode_id() as u64,
+            mode: if inode.is_dir() {
+                StatMode::DIR
+            } else {
+                StatMode::FILE
+            },
+            nlink: inode.nlink(),
+            pad: [0u64; 7],
+        }
     }
 }
 
@@ -155,5 +171,33 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn metadata(&self) -> Option<Stat> {
+        Some(self.inode_metadata())
+    }
+}
+
+/// Create a hard link named `new_name` to the existing file `old_name`.
+///
+/// Both names are relative to the root directory. Fails if the source does
+/// not exist or points to a directory.
+pub fn link_file(old_name: &str, new_name: &str) -> isize {
+    if let Some(inode) = ROOT_INODE.find(old_name) {
+        if inode.is_dir() || ROOT_INODE.link(new_name, &inode).is_none() {
+            -1
+        } else {
+            0
+        }
+    } else {
+        -1
+    }
+}
+
+/// Remove the file `name` from the root directory.
+pub fn unlink_file(name: &str) -> isize {
+    if ROOT_INODE.unlink(name).is_some() {
+        0
+    } else {
+        -1
     }
 }
