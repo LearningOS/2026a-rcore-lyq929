@@ -4,7 +4,9 @@ use crate::sync::UPSafeCell;
 use crate::task::{
     block_current_and_run_next, current_task, current_tid, wakeup_task, TaskControlBlock,
 };
-use alloc::{collections::VecDeque, sync::Arc};
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 /// semaphore structure
 pub struct Semaphore {
