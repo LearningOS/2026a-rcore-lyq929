@@ -26,7 +26,7 @@ use crate::timer::remove_timer;
 use alloc::{sync::Arc, vec::Vec};
 use lazy_static::*;
 use manager::fetch_task;
-use process::ProcessControlBlock;
+pub use process::{ProcessControlBlock, ProcessControlBlockInner};
 use switch::__switch;
 
 pub use context::TaskContext;
@@ -66,6 +66,20 @@ pub fn block_current_and_run_next() {
     task_inner.task_status = TaskStatus::Blocked;
     drop(task_inner);
     schedule(task_cx_ptr);
+}
+
+/// The tid of the current task.
+///
+/// Used by the synchronization primitives to remember who owns a mutex or
+/// holds a semaphore resource, and by deadlock detection.
+pub fn current_tid() -> usize {
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .res
+        .as_ref()
+        .map(|res| res.tid)
+        .unwrap_or(0)
 }
 
 use crate::board::QEMUExit;
